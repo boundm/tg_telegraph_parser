@@ -3,6 +3,7 @@ import asyncio
 import re
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
+from datetime import datetime
 
 user_agent = UserAgent().random
 
@@ -24,6 +25,15 @@ def slugify(text: str) -> str:
     translit = "".join(RU_EN_MAP.get(c, c) for c in text)
     return re.sub(r"[^a-z0-9]+", "-", translit).strip("-")
 
+# 🟡 Функция попытки парсинга даты
+def try_parse_date(text):
+    for fmt in ("%B %d, %Y", "%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    return None  # если не получилось
+
 async def fetch(session, url, sem):
     headers = {"User-Agent": user_agent}
     async with sem:
@@ -35,10 +45,12 @@ async def fetch(session, url, sem):
                     date_tag = soup.find('time') or soup.find(class_='tl_article_date')
                     date_text = date_tag.text.strip() if date_tag else "❓ Дата не найдена"
 
-                    print(f"{cs.GREEN}✅ Найдено: {url} — 🗓 {date_text}{cs.END}")
-                    return f"✅ {url} — 🗓 {date_text}"
-                else:
-                    print(f"{cs.INFO}❌ Не найдено: {url}{cs.END}")
+                    parsed_date = try_parse_date(date_text)
+                    return {
+                        "url": url,
+                        "date_str": date_text,
+                        "parsed_date": parsed_date
+                    }
         except Exception as e:
             print(f"{cs.INFO}⚠️ Ошибка запроса: {url} | {e}{cs.END}")
     return None
@@ -59,4 +71,10 @@ async def parse_title(title: str, offset: int = 2) -> list[str]:
         tasks = [fetch(session, url, sem) for url in urls]
         results = await asyncio.gather(*tasks)
 
-    return [r for r in results if r is not None]
+    valid_results = [r for r in results if r is not None]
+
+    # 🔽 Сортировка по parsed_date от новых к старым
+    sorted_results = sorted(valid_results, key=lambda r: r["parsed_date"] or datetime.min, reverse=True)
+
+    # 📤 Форматируем для вывода
+    return [f"✅ {r['url']} — 🗓 {r['date_str']}" for r in sorted_results]
